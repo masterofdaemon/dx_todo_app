@@ -18,6 +18,14 @@ pub struct Subtask {
     pub completed: bool,
 }
 
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+pub struct Project {
+    pub id: u64,
+    pub name: String,
+    #[serde(default)]
+    pub todos: Vec<Todo>,
+}
+
 #[derive(Clone, Copy, PartialEq)]
 pub enum Filter {
     All,

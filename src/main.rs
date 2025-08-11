@@ -2,29 +2,96 @@ use dioxus::prelude::*;
 use dioxus_router::prelude::use_navigator;
 use dioxus::events::Key;
 use std::cmp::max;
+use printpdf::{PdfDocument, PdfDocumentReference, Mm, BuiltinFont};
+use rfd::FileDialog;
 
 mod models;
 mod storage;
 mod components;
-use models::{Filter, Todo, Subtask};
-use storage::{load_todos, save_todos};
+use models::{Filter, Todo, Subtask, Project};
+use storage::{load_or_migrate_projects, save_projects};
 use components::{
     header::Header,
     add_form::AddForm,
     filter_bar::FilterBar,
     todo_item::TodoItem,
 };
+use components::projects::ProjectsState;
+use components::header::HeaderState;
 
 const FAVICON: Asset = asset!("/assets/favicon.ico");
 const MAIN_CSS: Asset = asset!("/assets/main.css");
 
 fn main() { dioxus::launch(App); }
 
+// Export active project to a simple PDF using printpdf's built-in Helvetica font
+fn export_active_project_pdf(projects: &Vec<Project>, active_id: Option<u64>) -> Result<(), String> {
+    let active_id = active_id.ok_or_else(|| "No active project selected".to_string())?;
+    let project = projects.iter().find(|p| p.id == active_id).ok_or_else(|| "Active project not found".to_string())?;
+
+    // Ask for save path
+    let Some(path) = FileDialog::new()
+        .set_title("Export Project to PDF")
+        .set_file_name(&format!("{}.pdf", project.name))
+        .save_file() else {
+        return Err("Save canceled".into());
+    };
+
+    // Document A4
+    let (doc, page1, layer1) = PdfDocument::new(&format!("Project: {}", project.name), Mm(210.0), Mm(297.0), "Layer 1");
+    let font = doc.add_builtin_font(BuiltinFont::Helvetica).map_err(|e| format!("font error: {e}"))?;
+
+    // Page layout
+    let mut current_page = page1;
+    let mut current_layer = doc.get_page(current_page).get_layer(layer1);
+    let margin_left = Mm(15.0);
+    let margin_top = Mm(15.0);
+    let line_height = Mm(6.0);
+    let mut cursor_y = Mm(297.0) - margin_top;
+
+    // Helper to write line and handle pagination
+    let mut write_line = |doc: &PdfDocumentReference, text: &str, size_pt: f64| {
+        if cursor_y.0 < 20.0 { // new page if near bottom
+            let (p, l) = doc.add_page(Mm(210.0), Mm(297.0), "Layer");
+            current_page = p;
+            current_layer = doc.get_page(current_page).get_layer(l);
+            cursor_y = Mm(297.0) - margin_top;
+        }
+        current_layer.use_text(text, size_pt, margin_left, cursor_y, &font);
+        cursor_y = Mm(cursor_y.0 - line_height.0);
+    };
+
+    // Header
+    write_line(&doc, &format!("Project: {}", project.name), 16.0);
+    write_line(&doc, "", 10.0);
+
+    // Tasks
+    for t in &project.todos {
+        let mark = if t.completed { "[x]" } else { "[ ]" };
+        write_line(&doc, &format!("{} {}", mark, t.title), 12.0);
+        // Subtasks
+        for s in &t.subtasks {
+            let mark = if s.completed { "[x]" } else { "[ ]" };
+            // indent by adding spaces
+            write_line(&doc, &format!("    {} {}", mark, s.title), 11.0);
+        }
+        if !t.description.trim().is_empty() {
+            write_line(&doc, &format!("    — {}", t.description.trim()), 10.0);
+        }
+    }
+
+    use std::fs::File;
+    use std::io::BufWriter;
+    let mut out = BufWriter::new(File::create(&path).map_err(|e| format!("create error: {e}"))?);
+    doc.save(&mut out).map_err(|e| format!("save error: {e}"))?;
+    Ok(())
+}
 // Types and persistence are defined in `models.rs` and `storage.rs`.
 
 #[derive(Clone, Copy)]
 struct AppState {
-    todos: Signal<Vec<Todo>>,
+    projects: Signal<Vec<Project>>,
+    active_project_id: Signal<Option<u64>>,
     new_title: Signal<String>,
     editing_id: Signal<Option<u64>>,
     editing_text: Signal<String>,
@@ -34,14 +101,16 @@ struct AppState {
 
 #[derive(Routable, Clone, PartialEq)]
 pub enum Route {
-    #[route("/")] List {},
+    #[route("/")] Projects {},
+    #[route("/list")] List {},
     #[route("/todo/:id")] Details { id: u64 },
 }
 
 #[component]
 fn App() -> Element {
     // State
-    let mut todos = use_signal(Vec::<Todo>::new);
+    let mut projects = use_signal(Vec::<Project>::new);
+    let mut active_project_id = use_signal(|| Option::<u64>::None);
     let new_title = use_signal(String::new);
     let editing_id = use_signal(|| Option::<u64>::None);
     let editing_text = use_signal(String::new);
@@ -50,61 +119,100 @@ fn App() -> Element {
 
     // Provide context for screens
     use_context_provider(|| AppState {
-        todos: todos.clone(),
+        projects: projects.clone(),
+        active_project_id: active_project_id.clone(),
         new_title: new_title.clone(),
         editing_id: editing_id.clone(),
         editing_text: editing_text.clone(),
         next_id: next_id.clone(),
         filter: filter.clone(),
     });
+    // Provide Projects and Header contexts
+    use_context_provider(|| ProjectsState { projects: projects.clone(), active_project_id: active_project_id.clone() });
+    let active_project_snap = use_signal(|| Option::<Project>::None);
+    use_context_provider(|| HeaderState { active_project: active_project_snap.clone() });
 
     // One-time load from disk after first render
     use_effect(move || {
-        let list = load_todos();
-        if !list.is_empty() {
-            let max_id_val = list.iter().fold(0u64, |acc, t| max(acc, t.id));
+        let loaded = load_or_migrate_projects();
+        println!("[App] Loaded {} project(s)", loaded.len());
+        if !loaded.is_empty() {
+            // choose first project by default if not selected
+            if active_project_id.read().is_none() {
+                println!("[App] No active project set. Selecting first: id={} name={} ", loaded[0].id, loaded[0].name);
+                active_project_id.set(Some(loaded[0].id));
+            }
+            // compute next id across all todos
+            let max_id_val = loaded
+                .iter()
+                .flat_map(|p| p.todos.iter())
+                .fold(0u64, |acc, t| max(acc, t.id));
             next_id.set(max_id_val + 1);
-            todos.set(list);
         }
+        projects.set(loaded);
     });
-    rsx! { Router::<Route> {} }
+    // keep active project snapshot updated for header
+    {
+        let projects = projects.clone();
+        let mut active_project_id = active_project_id.clone();
+        let mut active_project_snap = active_project_snap.clone();
+        use_effect(move || {
+            let opt = active_project_id.read().and_then(|id| projects.read().iter().find(|p| p.id == id).cloned());
+            if let Some(ref p) = opt { println!("[HeaderState] Active project snapshot updated: id={} name={}", p.id, p.name); } else { println!("[HeaderState] Active project snapshot updated: None"); }
+            active_project_snap.set(opt);
+        });
+    }
+    rsx! {
+        // Inject global assets once so all routes (including Projects) are styled on first load
+        document::Link { rel: "icon", href: FAVICON }
+        document::Link { rel: "stylesheet", href: MAIN_CSS }
+        Router::<Route> {}
+    }
 }
 
 // Home list screen
 #[component]
 fn List() -> Element {
     let state = use_context::<AppState>();
-    let mut todos = state.todos;
+    let mut projects = state.projects;
+    let mut active_project_id = state.active_project_id;
     let mut new_title = state.new_title;
     let mut editing_id = state.editing_id;
     let mut editing_text = state.editing_text;
     let mut next_id = state.next_id;
     let mut filter = state.filter;
+    let nav = use_navigator();
+
+    // Guard: require active project
+    let active_id_opt = *active_project_id.read();
+    let active_id = match active_id_opt { Some(id) => id, None => { println!("[List] No active project. Redirecting to Projects."); nav.push(Route::Projects {}); return rsx!{ div { class: "app", div { class: "card", "Select a project" } } }; } };
 
     // Add todo
     let mut on_add = move |title: String| {
         if title.trim().is_empty() { return; }
         let id = *next_id.read();
         next_id.set(id + 1);
-        todos.write().push(Todo { id, title, completed: false, subtasks: Vec::new(), description: String::new() });
-        save_todos(&todos.read());
+        if let Some(p) = projects.write().iter_mut().find(|p| p.id == active_id) {
+            p.todos.push(Todo { id, title, completed: false, subtasks: Vec::new(), description: String::new() });
+        }
+        save_projects(&projects.read());
     };
 
     // Item handlers
     let mut toggle = move |id: u64| {
-        if let Some(t) = todos.write().iter_mut().find(|t| t.id == id) {
+        if let Some(t) = projects.write().iter_mut().find(|p| p.id == active_id).and_then(|p| p.todos.iter_mut().find(|t| t.id == id)) {
             let target = !t.completed;
             t.completed = target;
             // propagate to subtasks
             for s in &mut t.subtasks { s.completed = target; }
         }
-        save_todos(&todos.read());
+        save_projects(&projects.read());
     };
     let mut start_edit = move |id: u64, text: String| { editing_id.set(Some(id)); editing_text.set(text); };
     let mut cancel_edit = move || { editing_id.set(None); editing_text.set(String::new()); };
-    let mut save_edit = move |id: u64| { let text = editing_text.read().clone(); if let Some(t) = todos.write().iter_mut().find(|t| t.id == id) { t.title = text.clone(); } save_todos(&todos.read()); editing_id.set(None); editing_text.set(String::new()); };
-    let mut remove_item = move |id: u64| { todos.write().retain(|t| t.id != id); save_todos(&todos.read()); };
-    let mut clear_completed = move || { todos.write().retain(|t| !t.completed); save_todos(&todos.read()); };
+    let mut save_edit = move |id: u64| { let text = editing_text.read().clone(); if let Some(t) = projects.write().iter_mut().find(|p| p.id == active_id).and_then(|p| p.todos.iter_mut().find(|t| t.id == id)) { t.title = text.clone(); } save_projects(&projects.read()); editing_id.set(None); editing_text.set(String::new()); };
+    let mut remove_item = move |id: u64| { if let Some(p) = projects.write().iter_mut().find(|p| p.id == active_id) { p.todos.retain(|t| t.id != id); } save_projects(&projects.read()); };
+    let mut clear_completed = move || { if let Some(p) = projects.write().iter_mut().find(|p| p.id == active_id) { p.todos.retain(|t| !t.completed); } save_projects(&projects.read()); };
     let mut confirming_clear = use_signal(|| false);
 
     // Drag & drop reordering state and handlers
@@ -123,19 +231,19 @@ fn List() -> Element {
         let src_opt = *dragging_from.read();
         if let Some(src_id) = src_opt {
             if src_id == target_id { dragging_from.set(None); return; }
-            let mut vec = todos.write();
-            if let (Some(src_idx), Some(dst_idx)) = (
-                vec.iter().position(|t| t.id == src_id),
-                vec.iter().position(|t| t.id == target_id),
-            ) {
-                let item = vec.remove(src_idx);
-                let insert_idx = if src_idx < dst_idx { dst_idx - 1 } else { dst_idx };
-                vec.insert(insert_idx, item);
+            if let Some(p) = projects.write().iter_mut().find(|p| p.id == active_id) {
+                if let (Some(src_idx), Some(dst_idx)) = (
+                    p.todos.iter().position(|t| t.id == src_id),
+                    p.todos.iter().position(|t| t.id == target_id),
+                ) {
+                    let item = p.todos.remove(src_idx);
+                    let insert_idx = if src_idx < dst_idx { dst_idx - 1 } else { dst_idx };
+                    p.todos.insert(insert_idx, item);
+                }
             }
-            drop(vec);
             dragging_from.set(None);
             drag_over.set(None);
-            save_todos(&todos.read());
+            save_projects(&projects.read());
         }
     };
 
@@ -144,7 +252,19 @@ fn List() -> Element {
         document::Link { rel: "stylesheet", href: MAIN_CSS }
         div { class: "app",
             div { class: "card",
-                Header { count: todos.read().len() }
+                // header actions
+                Header { 
+                    count: projects.read().iter().find(|p| p.id == active_id).map(|p| p.todos.len()).unwrap_or(0),
+                    on_switch: move |_| { println!("[Header] Switch clicked"); nav.push(Route::Projects {}); },
+                    on_export: move |_| {
+                        println!("[Header] Export clicked");
+                        let res = export_active_project_pdf(&projects.read(), *active_project_id.read());
+                        match res {
+                            Ok(()) => println!("[Export] Success"),
+                            Err(e) => println!("[Export] Error: {}", e),
+                        }
+                    }
+                }
                 AddForm { value: new_title.read().clone(),
                     on_input: move |e: dioxus::events::FormEvent| new_title.set(e.value()),
                     on_enter: move |e: dioxus::events::KeyboardEvent| if e.key() == Key::Enter {
@@ -160,7 +280,10 @@ fn List() -> Element {
                 }
                 FilterBar { active: *filter.read(), on_all: move |_| filter.set(Filter::All), on_active: move |_| filter.set(Filter::Active), on_completed: move |_| filter.set(Filter::Completed), on_clear_completed: move |_| confirming_clear.set(true) }
                 ul { class: "list",
-                    for t in todos.read().iter().cloned().filter(|t| match *filter.read() { Filter::All => true, Filter::Active => !t.completed, Filter::Completed => t.completed }) {
+                    {
+                        let items: Vec<Todo> = projects.read().iter().find(|p| p.id == active_id).map(|p| p.todos.clone()).unwrap_or_else(|| Vec::new());
+                        rsx! {
+                            for t in items.into_iter().filter(|t| match *filter.read() { Filter::All => true, Filter::Active => !t.completed, Filter::Completed => t.completed }) {
                         TodoItem {
                             todo: t.clone(),
                             is_editing: editing_id.read().as_ref().is_some_and(|eid| *eid == t.id),
@@ -179,6 +302,8 @@ fn List() -> Element {
                             on_drop: move |id| on_drop_on_item(id),
                             is_dragging: dragging_from.read().as_ref() == Some(t.id).as_ref(),
                             is_drag_over: drag_over.read().as_ref() == Some(t.id).as_ref(),
+                        }
+                            }
                         }
                     }
                 }
@@ -200,29 +325,43 @@ fn List() -> Element {
     }
 }
 
+// Projects screen renders list/create projects and sets active_project_id
+#[component]
+fn Projects() -> Element {
+    let state = use_context::<AppState>();
+    let _projects = state.projects;
+    let _active_project_id = state.active_project_id;
+
+    rsx! { components::projects::Projects {} }
+}
+
 // Details screen
 #[component]
 fn Details(id: u64) -> Element {
     let state = use_context::<AppState>();
-    let mut todos = state.todos;
+    let mut projects = state.projects;
+    let active_project_id = state.active_project_id;
     let nav = use_navigator();
 
-    let todo_opt = todos.read().iter().cloned().find(|t| t.id == id);
+    // Guard: require active project
+    let active_id = match *active_project_id.read() { Some(id) => id, None => { nav.push(Route::Projects {}); return rsx!{ div { class: "app", div { class: "card", "Select a project" } } }; } };
+
+    let todo_opt = projects.read().iter().find(|p| p.id == active_id).and_then(|p| p.todos.iter().cloned().find(|t| t.id == id));
     let Some(todo) = todo_opt else { return rsx!{ div { class: "app", div { class: "card", "Not found" } } }; };
 
     // Subtasks handlers
     let mut add_sub = move |title: String| {
         if title.trim().is_empty() { return; }
-        if let Some(it) = todos.write().iter_mut().find(|t| t.id == id) {
+        if let Some(it) = projects.write().iter_mut().find(|p| p.id == active_id).and_then(|p| p.todos.iter_mut().find(|t| t.id == id)) {
             let next_sid = it.subtasks.iter().map(|s| s.id).max().unwrap_or(0) + 1;
             it.subtasks.push(Subtask { id: next_sid, title, completed: false });
             // New subtask means parent can't be completed
             it.completed = false;
         }
-        save_todos(&todos.read());
+        save_projects(&projects.read());
     };
     let mut toggle_sub = move |sid: u64| {
-        if let Some(it) = todos.write().iter_mut().find(|t| t.id == id) {
+        if let Some(it) = projects.write().iter_mut().find(|p| p.id == active_id).and_then(|p| p.todos.iter_mut().find(|t| t.id == id)) {
             if let Some(st) = it.subtasks.iter_mut().find(|s| s.id == sid) {
                 st.completed = !st.completed;
             }
@@ -231,10 +370,10 @@ fn Details(id: u64) -> Element {
                 it.completed = it.subtasks.iter().all(|s| s.completed);
             }
         }
-        save_todos(&todos.read());
+        save_projects(&projects.read());
     };
     let mut remove_sub = move |sid: u64| {
-        if let Some(it) = todos.write().iter_mut().find(|t| t.id == id) {
+        if let Some(it) = projects.write().iter_mut().find(|p| p.id == active_id).and_then(|p| p.todos.iter_mut().find(|t| t.id == id)) {
             it.subtasks.retain(|s| s.id != sid);
             if !it.subtasks.is_empty() {
                 it.completed = it.subtasks.iter().all(|s| s.completed);
@@ -242,9 +381,9 @@ fn Details(id: u64) -> Element {
                 // No subtasks: do not auto-complete; leave as-is
             }
         }
-        save_todos(&todos.read());
+        save_projects(&projects.read());
     };
-    let mut update_desc = move |v: String| { if let Some(it) = todos.write().iter_mut().find(|t| t.id == id) { it.description = v; } save_todos(&todos.read()); };
+    let mut update_desc = move |v: String| { if let Some(it) = projects.write().iter_mut().find(|p| p.id == active_id).and_then(|p| p.todos.iter_mut().find(|t| t.id == id)) { it.description = v; } save_projects(&projects.read()); };
 
     let mut sub_input = use_signal(String::new);
 

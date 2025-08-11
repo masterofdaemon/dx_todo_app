@@ -12,6 +12,9 @@ dioxus-desktop = "0.6"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 directories = "5"
+genpdf = { version = "0.2.0-alpha.1" }
+rfd = "0.14"
+printpdf = "0.3"
 
 [features]
 default = ["desktop"]

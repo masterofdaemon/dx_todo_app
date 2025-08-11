@@ -109,8 +109,16 @@ fn List() -> Element {
 
     // Drag & drop reordering state and handlers
     let mut dragging_from = use_signal(|| Option::<u64>::None);
+    let mut drag_over = use_signal(|| Option::<u64>::None);
     let mut on_drag_start_item = move |id: u64| { dragging_from.set(Some(id)); };
-    let mut on_drag_over_item = move |_id: u64| { /* no-op: needed to allow drop */ };
+    let mut on_drag_over_item = move |id: u64| { drag_over.set(Some(id)); };
+    let mut on_drag_leave_item = move |id: u64| {
+        if drag_over.read().as_ref() == Some(id).as_ref() { drag_over.set(None); }
+    };
+    let mut on_drag_end_item = move |_id: u64| {
+        dragging_from.set(None);
+        drag_over.set(None);
+    };
     let mut on_drop_on_item = move |target_id: u64| {
         let src_opt = *dragging_from.read();
         if let Some(src_id) = src_opt {
@@ -126,6 +134,7 @@ fn List() -> Element {
             }
             drop(vec);
             dragging_from.set(None);
+            drag_over.set(None);
             save_todos(&todos.read());
         }
     };
@@ -165,7 +174,11 @@ fn List() -> Element {
                             on_cancel: move |_| cancel_edit(),
                             on_drag_start: move |id| on_drag_start_item(id),
                             on_drag_over: move |id| on_drag_over_item(id),
+                            on_drag_leave: move |id| on_drag_leave_item(id),
+                            on_drag_end: move |id| on_drag_end_item(id),
                             on_drop: move |id| on_drop_on_item(id),
+                            is_dragging: dragging_from.read().as_ref() == Some(t.id).as_ref(),
+                            is_drag_over: drag_over.read().as_ref() == Some(t.id).as_ref(),
                         }
                     }
                 }

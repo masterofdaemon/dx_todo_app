@@ -19,20 +19,38 @@ pub fn TodoItem(
     // Drag & drop reordering
     on_drag_start: EventHandler<u64>,
     on_drag_over: EventHandler<u64>,
+    on_drag_leave: EventHandler<u64>,
+    on_drag_end: EventHandler<u64>,
     on_drop: EventHandler<u64>,
+    // Visual flags
+    is_dragging: bool,
+    is_drag_over: bool,
 ) -> Element {
     let nav = use_navigator();
     rsx! {
         li {
             ondragover: move |e: dioxus::events::DragEvent| { e.prevent_default(); on_drag_over.call(todo.id); },
+            ondragleave: move |_| on_drag_leave.call(todo.id),
             ondrop: move |_| on_drop.call(todo.id),
-            class: if is_editing { "list-item editing" } else { "list-item" },
+            class: {
+                let mut cls = if is_editing { "list-item editing".to_string() } else { "list-item".to_string() };
+                if is_dragging { cls.push_str(" dragging"); }
+                if is_drag_over { cls.push_str(" drag-over"); }
+                cls
+            },
             // complete toggle
             if !is_editing {
                 div { class: "row between",
                     div { class: "left",
-                        span { class: "drag-handle", title: "Drag to reorder", draggable: "true", ondragstart: move |_| on_drag_start.call(todo.id),
-                            svg { view_box: "0 0 24 24", fill: "currentColor",
+                        span { 
+                            class: "drag-handle", 
+                            title: "Drag to reorder", 
+                            draggable: "true", 
+                            ondragstart: move |_| on_drag_start.call(todo.id),
+                            ondragend: move |_| on_drag_end.call(todo.id),
+                            svg { 
+                                view_box: "0 0 24 24", 
+                                fill: "currentColor",
                                 circle { cx: "7", cy: "7", r: "1.5" }
                                 circle { cx: "7", cy: "12", r: "1.5" }
                                 circle { cx: "7", cy: "17", r: "1.5" }

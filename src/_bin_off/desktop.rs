@@ -3,6 +3,7 @@ use dioxus_router::prelude::use_navigator;
 use dioxus::events::Key;
 use std::cmp::max;
 use printpdf::{PdfDocument, PdfDocumentReference, Mm, BuiltinFont};
+#[cfg(not(target_os = "android"))]
 use rfd::FileDialog;
 
 mod models;
@@ -22,9 +23,67 @@ use components::header::HeaderState;
 const FAVICON: Asset = asset!("/assets/favicon.ico");
 const MAIN_CSS: Asset = asset!("/assets/main.css");
 
+#[cfg(target_os = "android")]
+fn main() { dioxus_mobile::launch(App); }
+
+#[cfg(not(target_os = "android"))]
 fn main() { dioxus::launch(App); }
 
-// Export active project to a simple PDF using printpdf's built-in Helvetica font
+// Android: export without a file dialog – write into app temp directory
+#[cfg(target_os = "android")]
+fn export_active_project_pdf(projects: &Vec<Project>, active_id: Option<u64>) -> Result<(), String> {
+    let active_id = active_id.ok_or_else(|| "No active project selected".to_string())?;
+    let project = projects.iter().find(|p| p.id == active_id).ok_or_else(|| "Active project not found".to_string())?;
+
+    let (doc, page1, layer1) = PdfDocument::new(&format!("Project: {}", project.name), Mm(210.0), Mm(297.0), "Layer 1");
+    let font = doc.add_builtin_font(BuiltinFont::Helvetica).map_err(|e| format!("font error: {e}"))?;
+
+    let mut current_page = page1;
+    let mut current_layer = doc.get_page(current_page).get_layer(layer1);
+    let margin_left = Mm(15.0);
+    let margin_top = Mm(15.0);
+    let line_height = Mm(6.0);
+    let mut cursor_y = Mm(297.0) - margin_top;
+
+    let mut write_line = |doc: &PdfDocumentReference, text: &str, size_pt: f64| {
+        if cursor_y.0 < 20.0 {
+            let (p, l) = doc.add_page(Mm(210.0), Mm(297.0), "Layer");
+            current_page = p;
+            current_layer = doc.get_page(current_page).get_layer(l);
+            cursor_y = Mm(297.0) - margin_top;
+        }
+        current_layer.use_text(text, size_pt, margin_left, cursor_y, &font);
+        cursor_y = Mm(cursor_y.0 - line_height.0);
+    };
+
+    write_line(&doc, &format!("Project: {}", project.name), 16.0);
+    write_line(&doc, "", 10.0);
+    for t in &project.todos {
+        let mark = if t.completed { "[x]" } else { "[ ]" };
+        write_line(&doc, &format!("{} {}", mark, t.title), 12.0);
+        for s in &t.subtasks {
+            let mark = if s.completed { "[x]" } else { "[ ]" };
+            write_line(&doc, &format!("    {} {}", mark, s.title), 11.0);
+        }
+        if !t.description.trim().is_empty() {
+            write_line(&doc, &format!("    — {}", t.description.trim()), 10.0);
+        }
+    }
+
+    use std::fs::File;
+    use std::io::BufWriter;
+    let mut out_path = std::env::temp_dir();
+    let ts = chrono::Utc::now().timestamp();
+    let fname = format!("{}_{}.pdf", project.name.replace('/', "-"), ts);
+    out_path.push(fname);
+    let mut out = BufWriter::new(File::create(&out_path).map_err(|e| format!("create error: {e}"))?);
+    doc.save(&mut out).map_err(|e| format!("save error: {e}"))?;
+    println!("[Export][Android] Saved to {}", out_path.display());
+    Ok(())
+}
+
+// Export active project to a simple PDF using printpdf's built-in Helvetica font (Desktop)
+#[cfg(not(target_os = "android"))]
 fn export_active_project_pdf(projects: &Vec<Project>, active_id: Option<u64>) -> Result<(), String> {
     let active_id = active_id.ok_or_else(|| "No active project selected".to_string())?;
     let project = projects.iter().find(|p| p.id == active_id).ok_or_else(|| "Active project not found".to_string())?;

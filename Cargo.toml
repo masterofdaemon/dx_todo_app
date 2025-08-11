@@ -8,16 +8,53 @@ edition = "2024"
 
 [dependencies]
 dioxus = { version = "0.6", features = ["router"] }
-dioxus-desktop = "0.6"
+# Platform UI crates are optional and enabled via features
+dioxus-desktop = { version = "0.6", optional = true }
+dioxus-mobile = { version = "0.6", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 directories = "5"
 genpdf = { version = "0.2.0-alpha.1" }
-rfd = "0.14"
+# File dialogs only for desktop platforms
+rfd = { version = "0.14", optional = true }
 printpdf = "0.3"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+jni = { version = "0.21", default-features = false }
+ndk-context = "0.1"
+# dioxus-mobile provides the NativeActivity when the library is named `dioxusmain`
 
 [features]
-default = ["desktop"]
+# Default to mobile to make Android easy
+default = ["mobile"]
 web = ["dioxus/web"]
-desktop = ["dioxus/desktop"]
-mobile = ["dioxus/mobile"]
+# Desktop enables desktop-specific dioxus crate and rfd dialogs
+desktop = ["dioxus/desktop", "dioxus-desktop", "rfd"]
+# Mobile enables mobile-specific crate
+mobile = ["dioxus/mobile", "dioxus-mobile"]
+
+[lib]
+name = "dioxusmain"
+crate-type = ["cdylib", "rlib"]
+
+
+[profile]
+
+[profile.wasm-dev]
+inherits = "dev"
+opt-level = 1
+
+[profile.server-dev]
+inherits = "dev"
+
+[profile.android-dev]
+inherits = "dev"
+
+[package.metadata.android]
+# Use package name expected by `dx serve` mobile template
+package = "com.example.DxTodoApp"
+label = "DX Todo App"
+target_sdk_version = 34
+min_sdk_version = 26
+assets = "assets"
+fullscreen = false
+compile_sdk_version = 34

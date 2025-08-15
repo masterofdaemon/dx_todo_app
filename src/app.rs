@@ -2,8 +2,9 @@ use dioxus::prelude::*;
 use dioxus_router::prelude::use_navigator;
 use dioxus::events::Key;
 use std::cmp::max;
-use printpdf::{PdfDocument, PdfDocumentReference, Mm, BuiltinFont};
-#[cfg(not(target_os = "android"))]
+use printpdf::{PdfDocument, PdfDocumentReference, Mm, BuiltinFont, IndirectFontRef};
+use printpdf::indices::{PdfPageIndex, PdfLayerIndex};
+#[cfg(all(not(target_os = "android"), feature = "desktop"))]
 use rfd::FileDialog;
 
 use crate::models::{Filter, Todo, Subtask, Project};
@@ -41,40 +42,171 @@ fn android_toast(_msg: &str) {}
 #[cfg(target_os = "android")]
 fn export_active_project_pdf(projects: &Vec<Project>, active_id: Option<u64>) -> Result<(), String> {
     let active_id = active_id.ok_or_else(|| "No active project selected".to_string())?;
-    let project = projects.iter().find(|p| p.id == active_id).ok_or_else(|| "Active project not found".to_string())?;
+    let project = projects
+        .iter()
+        .find(|p| p.id == active_id)
+        .ok_or_else(|| "Active project not found".to_string())?;
 
-    let (doc, page1, layer1) = PdfDocument::new(&format!("Project: {}", project.name), Mm(210.0), Mm(297.0), "Layer 1");
-    let font = doc.add_builtin_font(BuiltinFont::Helvetica).map_err(|e| format!("font error: {e}"))?;
+    // Create doc and fonts
+    let (doc, page1, layer1) = PdfDocument::new(
+        &format!("Project Report — {}", project.name),
+        Mm(210.0),
+        Mm(297.0),
+        "Layer 1",
+    );
+    let font_regular = doc
+        .add_builtin_font(BuiltinFont::Helvetica)
+        .map_err(|e| format!("font error: {e}"))?;
+    let font_bold = doc
+        .add_builtin_font(BuiltinFont::HelveticaBold)
+        .map_err(|e| format!("font error: {e}"))?;
 
-    let mut current_page = page1;
-    let mut current_layer = doc.get_page(current_page).get_layer(layer1);
+    // Layout
+    let mut current_page: PdfPageIndex = page1;
+    let mut current_layer_idx: PdfLayerIndex = layer1;
     let margin_left = Mm(15.0);
     let margin_top = Mm(15.0);
     let line_height = Mm(6.0);
     let mut cursor_y = Mm(297.0) - margin_top;
 
-    let mut write_line = |doc: &PdfDocumentReference, text: &str, size_pt: f64| {
+    // Helper to write one line, handling pagination, using indices to avoid borrow issues
+    fn write_line(
+        doc: &PdfDocumentReference,
+        current_page: &mut PdfPageIndex,
+        current_layer_idx: &mut PdfLayerIndex,
+        cursor_y: &mut Mm,
+        margin_left: Mm,
+        margin_top: Mm,
+        line_height: Mm,
+        font: &IndirectFontRef,
+        text: &str,
+        size_pt: f64,
+    ) {
         if cursor_y.0 < 20.0 {
             let (p, l) = doc.add_page(Mm(210.0), Mm(297.0), "Layer");
-            current_page = p;
-            current_layer = doc.get_page(current_page).get_layer(l);
-            cursor_y = Mm(297.0) - margin_top;
+            *current_page = p;
+            *current_layer_idx = l;
+            *cursor_y = Mm(297.0) - margin_top;
         }
-        current_layer.use_text(text, size_pt, margin_left, cursor_y, &font);
-        cursor_y = Mm(cursor_y.0 - line_height.0);
+        let layer = doc.get_page(*current_page).get_layer(*current_layer_idx);
+        layer.use_text(text, size_pt, margin_left, *cursor_y, font);
+        *cursor_y = Mm(cursor_y.0 - line_height.0);
+    }
+    fn wrap_text(s: &str, max_chars: usize) -> Vec<String> {
+        let words: Vec<&str> = s.split_whitespace().collect();
+        let mut lines: Vec<String> = Vec::new();
+        let mut line = String::new();
+        for w in words {
+            if line.is_empty() {
+                line.push_str(w);
+            } else if line.len() + 1 + w.len() <= max_chars {
+                line.push(' ');
+                line.push_str(w);
+            } else {
+                lines.push(line);
+                line = w.to_string();
+            }
+        }
+        if !line.is_empty() {
+            lines.push(line);
+        }
+        if lines.is_empty() { vec![String::new()] } else { lines }
+    }
+
+    // Data & Summary
+    let total_tasks = project.todos.len();
+    let completed_tasks = project.todos.iter().filter(|t| t.completed).count();
+    let active_tasks = total_tasks - completed_tasks;
+    let total_subtasks: usize = project.todos.iter().map(|t| t.subtasks.len()).sum();
+    let completion = if total_tasks > 0 {
+        (completed_tasks as f64 / total_tasks as f64) * 100.0
+    } else {
+        0.0
     };
 
-    write_line(&doc, &format!("Project: {}", project.name), 16.0);
-    write_line(&doc, "", 10.0);
-    for t in &project.todos {
-        let mark = if t.completed { "[x]" } else { "[ ]" };
-        write_line(&doc, &format!("{} {}", mark, t.title), 12.0);
-        for s in &t.subtasks {
-            let mark = if s.completed { "[x]" } else { "[ ]" };
-            write_line(&doc, &format!("    {} {}", mark, s.title), 11.0);
+    // Header
+    let date_str = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
+    write_line(&doc, &mut current_page, &mut current_layer_idx, &mut cursor_y, margin_left, margin_top, line_height, &font_bold, "Project Report", 18.0);
+    write_line(&doc, &mut current_page, &mut current_layer_idx, &mut cursor_y, margin_left, margin_top, line_height, &font_regular, &project.name, 15.0);
+    let generated_line = format!("Generated: {}", date_str);
+    write_line(&doc, &mut current_page, &mut current_layer_idx, &mut cursor_y, margin_left, margin_top, line_height, &font_regular, &generated_line, 10.0);
+    write_line(&doc, &mut current_page, &mut current_layer_idx, &mut cursor_y, margin_left, margin_top, line_height, &font_regular, "", 8.0);
+
+    // Summary block
+    write_line(&doc, &mut current_page, &mut current_layer_idx, &mut cursor_y, margin_left, margin_top, line_height, &font_bold, "Summary", 14.0);
+    let summary = format!(
+        "Tasks: {}  •  Completed: {}  •  Active: {}  •  Subtasks: {}  •  Completion: {:.1}%",
+        total_tasks, completed_tasks, active_tasks, total_subtasks, completion
+    );
+    write_line(&doc, &mut current_page, &mut current_layer_idx, &mut cursor_y, margin_left, margin_top, line_height, &font_regular, &summary, 11.0);
+    write_line(&doc, &mut current_page, &mut current_layer_idx, &mut cursor_y, margin_left, margin_top, line_height, &font_regular, "", 6.0);
+
+    // Section: Active Tasks
+    if active_tasks > 0 {
+        write_line(&doc, &mut current_page, &mut current_layer_idx, &mut cursor_y, margin_left, margin_top, line_height, &font_bold, "Active Tasks", 13.0);
+        for t in project.todos.iter().filter(|t| !t.completed) {
+            let first = format!("[ ] {}", t.title);
+            for (i, line) in wrap_text(&first, 90).into_iter().enumerate() {
+                if i == 0 {
+                    write_line(&doc, &mut current_page, &mut current_layer_idx, &mut cursor_y, margin_left, margin_top, line_height, &font_regular, &line, 12.0);
+                } else {
+                    let ind = format!("    {}", line);
+                    write_line(&doc, &mut current_page, &mut current_layer_idx, &mut cursor_y, margin_left, margin_top, line_height, &font_regular, &ind, 12.0);
+                }
+            }
+            if !t.description.trim().is_empty() {
+                let desc = format!("— {}", t.description.trim());
+                for line in wrap_text(&desc, 95) {
+                    let ind = format!("    {}", line);
+                    write_line(&doc, &mut current_page, &mut current_layer_idx, &mut cursor_y, margin_left, margin_top, line_height, &font_regular, &ind, 10.0);
+                }
+            }
+            for s in &t.subtasks {
+                let sub = format!("    {} {}", if s.completed { "[x]" } else { "[ ]" }, s.title);
+                for (i, line) in wrap_text(&sub, 95).into_iter().enumerate() {
+                    if i == 0 {
+                        write_line(&doc, &mut current_page, &mut current_layer_idx, &mut cursor_y, margin_left, margin_top, line_height, &font_regular, &line, 11.0);
+                    } else {
+                        let ind = format!("    {}", line);
+                        write_line(&doc, &mut current_page, &mut current_layer_idx, &mut cursor_y, margin_left, margin_top, line_height, &font_regular, &ind, 11.0);
+                    }
+                }
+            }
         }
-        if !t.description.trim().is_empty() {
-            write_line(&doc, &format!("    — {}", t.description.trim()), 10.0);
+        write_line(&doc, &mut current_page, &mut current_layer_idx, &mut cursor_y, margin_left, margin_top, line_height, &font_regular, "", 6.0);
+    }
+
+    // Section: Completed Tasks
+    if completed_tasks > 0 {
+        write_line(&doc, &mut current_page, &mut current_layer_idx, &mut cursor_y, margin_left, margin_top, line_height, &font_bold, "Completed Tasks", 13.0);
+        for t in project.todos.iter().filter(|t| t.completed) {
+            let first = format!("[x] {}", t.title);
+            for (i, line) in wrap_text(&first, 90).into_iter().enumerate() {
+                if i == 0 {
+                    write_line(&doc, &mut current_page, &mut current_layer_idx, &mut cursor_y, margin_left, margin_top, line_height, &font_regular, &line, 12.0);
+                } else {
+                    let ind = format!("    {}", line);
+                    write_line(&doc, &mut current_page, &mut current_layer_idx, &mut cursor_y, margin_left, margin_top, line_height, &font_regular, &ind, 12.0);
+                }
+            }
+            if !t.description.trim().is_empty() {
+                let desc = format!("— {}", t.description.trim());
+                for line in wrap_text(&desc, 95) {
+                    let ind = format!("    {}", line);
+                    write_line(&doc, &mut current_page, &mut current_layer_idx, &mut cursor_y, margin_left, margin_top, line_height, &font_regular, &ind, 10.0);
+                }
+            }
+            for s in &t.subtasks {
+                let sub = format!("    {} {}", if s.completed { "[x]" } else { "[ ]" }, s.title);
+                for (i, line) in wrap_text(&sub, 95).into_iter().enumerate() {
+                    if i == 0 {
+                        write_line(&doc, &mut current_page, &mut current_layer_idx, &mut cursor_y, margin_left, margin_top, line_height, &font_regular, &line, 11.0);
+                    } else {
+                        let ind = format!("    {}", line);
+                        write_line(&doc, &mut current_page, &mut current_layer_idx, &mut cursor_y, margin_left, margin_top, line_height, &font_regular, &ind, 11.0);
+                    }
+                }
+            }
         }
     }
 
@@ -182,12 +314,25 @@ fn export_active_project_pdf(projects: &Vec<Project>, active_id: Option<u64>) ->
         // Mark not pending: values = new ContentValues(); values.put(IS_PENDING, 0); resolver.update(uri, values, null, null);
         let values2 = env.new_object("android/content/ContentValues", "()V", &[]).map_err(|e| format!("ContentValues() #2: {e}"))?;
         let zero = JValue::Int(0);
-        let zero_obj = env.call_static_method("java/lang/Integer", "valueOf", "(I)Ljava/lang/Integer;", &[zero]).and_then(|v| v.l()).map_err(|e| format!("Integer.valueOf(0): {e}"))?;
+        let zero_obj = env
+            .call_static_method("java/lang/Integer", "valueOf", "(I)Ljava/lang/Integer;", &[zero])
+            .and_then(|v| v.l())
+            .map_err(|e| format!("Integer.valueOf(0): {e}"))?;
         env
             .call_method(&values2, "put", "(Ljava/lang/String;Ljava/lang/Integer;)V", &[JValue::Object(&k_is_pending), JValue::Object(&zero_obj)])
             .map_err(|e| format!("values2.put pending=0: {e}"))?;
         env
-            .call_method(&resolver, "update", "(Landroid/net/Uri;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;)I", &[JValue::Object(&uri), JValue::Object(&values2), JValue::Object(&JObject::null()), JValue::Object(&JObject::null())])
+            .call_method(
+                &resolver,
+                "update",
+                "(Landroid/net/Uri;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;)I",
+                &[
+                    JValue::Object(&uri),
+                    JValue::Object(&values2),
+                    JValue::Object(&JObject::null()),
+                    JValue::Object(&JObject::null()),
+                ],
+            )
             .map_err(|e| format!("resolver.update pending=0: {e}"))?;
 
         println!("[Export][Android] Saved to MediaStore Downloads");
@@ -195,11 +340,14 @@ fn export_active_project_pdf(projects: &Vec<Project>, active_id: Option<u64>) ->
     }
 }
 
-// Desktop export
-#[cfg(not(target_os = "android"))]
+// Desktop export (with file dialog when `desktop` feature is enabled)
+#[cfg(all(not(target_os = "android"), feature = "desktop"))]
 fn export_active_project_pdf(projects: &Vec<Project>, active_id: Option<u64>) -> Result<(), String> {
     let active_id = active_id.ok_or_else(|| "No active project selected".to_string())?;
-    let project = projects.iter().find(|p| p.id == active_id).ok_or_else(|| "Active project not found".to_string())?;
+    let project = projects
+        .iter()
+        .find(|p| p.id == active_id)
+        .ok_or_else(|| "Active project not found".to_string())?;
 
     let Some(path) = FileDialog::new()
         .set_title("Export Project to PDF")
@@ -208,37 +356,133 @@ fn export_active_project_pdf(projects: &Vec<Project>, active_id: Option<u64>) ->
         return Err("Save canceled".into());
     };
 
-    let (doc, page1, layer1) = PdfDocument::new(&format!("Project: {}", project.name), Mm(210.0), Mm(297.0), "Layer 1");
-    let font = doc.add_builtin_font(BuiltinFont::Helvetica).map_err(|e| format!("font error: {e}"))?;
+    // Create doc and fonts
+    let (doc, page1, layer1) = PdfDocument::new(
+        &format!("Project Report — {}", project.name),
+        Mm(210.0),
+        Mm(297.0),
+        "Layer 1",
+    );
+    let font_regular = doc
+        .add_builtin_font(BuiltinFont::Helvetica)
+        .map_err(|e| format!("font error: {e}"))?;
+    let font_bold = doc
+        .add_builtin_font(BuiltinFont::HelveticaBold)
+        .map_err(|e| format!("font error: {e}"))?;
 
+    // Layout
     let mut current_page = page1;
     let mut current_layer = doc.get_page(current_page).get_layer(layer1);
     let margin_left = Mm(15.0);
     let margin_top = Mm(15.0);
-    let line_height = Mm(6.0);
     let mut cursor_y = Mm(297.0) - margin_top;
-    let mut write_line = |doc: &PdfDocumentReference, text: &str, size_pt: f64| {
+
+    // Helpers
+    let mut ensure_page = |doc: &PdfDocumentReference| {
         if cursor_y.0 < 20.0 {
             let (p, l) = doc.add_page(Mm(210.0), Mm(297.0), "Layer");
             current_page = p;
             current_layer = doc.get_page(current_page).get_layer(l);
             cursor_y = Mm(297.0) - margin_top;
         }
-        current_layer.use_text(text, size_pt, margin_left, cursor_y, &font);
-        cursor_y = Mm(cursor_y.0 - line_height.0);
+    };
+    let mut write_line = |doc: &PdfDocumentReference, text: &str, size_pt: f64, bold: bool| {
+        ensure_page(doc);
+        let font = if bold { &font_bold } else { &font_regular };
+        current_layer.use_text(text, size_pt, margin_left, cursor_y, font);
+        // approximate line height from font size
+        cursor_y = Mm(cursor_y.0 - (size_pt * 0.42));
+    };
+    fn wrap_text(s: &str, max_chars: usize) -> Vec<String> {
+        let words: Vec<&str> = s.split_whitespace().collect();
+        let mut lines: Vec<String> = Vec::new();
+        let mut line = String::new();
+        for w in words {
+            if line.is_empty() {
+                line.push_str(w);
+            } else if line.len() + 1 + w.len() <= max_chars {
+                line.push(' ');
+                line.push_str(w);
+            } else {
+                lines.push(line);
+                line = w.to_string();
+            }
+        }
+        if !line.is_empty() {
+            lines.push(line);
+        }
+        if lines.is_empty() { vec![String::new()] } else { lines }
+    }
+
+    // Data & Summary
+    let total_tasks = project.todos.len();
+    let completed_tasks = project.todos.iter().filter(|t| t.completed).count();
+    let active_tasks = total_tasks - completed_tasks;
+    let total_subtasks: usize = project.todos.iter().map(|t| t.subtasks.len()).sum();
+    let completion = if total_tasks > 0 {
+        (completed_tasks as f64 / total_tasks as f64) * 100.0
+    } else {
+        0.0
     };
 
-    write_line(&doc, &format!("Project: {}", project.name), 16.0);
-    write_line(&doc, "", 10.0);
-    for t in &project.todos {
-        let mark = if t.completed { "[x]" } else { "[ ]" };
-        write_line(&doc, &format!("{} {}", mark, t.title), 12.0);
-        for s in &t.subtasks {
-            let mark = if s.completed { "[x]" } else { "[ ]" };
-            write_line(&doc, &format!("    {} {}", mark, s.title), 11.0);
+    // Header
+    let date_str = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
+    write_line(&doc, &format!("Project Report"), 18.0, true);
+    write_line(&doc, &format!("{}", project.name), 15.0, false);
+    write_line(&doc, &format!("Generated: {}", date_str), 10.0, false);
+    write_line(&doc, "", 8.0, false);
+
+    // Summary block
+    write_line(&doc, "Summary", 14.0, true);
+    write_line(
+        &doc,
+        &format!(
+            "Tasks: {}  •  Completed: {}  •  Active: {}  •  Subtasks: {}  •  Completion: {:>.1}%",
+            total_tasks, completed_tasks, active_tasks, total_subtasks, completion
+        ),
+        11.0,
+        false,
+    );
+    write_line(&doc, "", 6.0, false);
+
+    // Section: Active Tasks
+    if active_tasks > 0 {
+        write_line(&doc, "Active Tasks", 13.0, true);
+        for t in project.todos.iter().filter(|t| !t.completed) {
+            for (i, line) in wrap_text(&format!("[ ] {}", t.title), 90).into_iter().enumerate() {
+                write_line(&doc, if i == 0 { &line } else { &format!("    {}", line) }, 12.0, false);
+            }
+            if !t.description.trim().is_empty() {
+                for line in wrap_text(&format!("— {}", t.description.trim()), 95) {
+                    write_line(&doc, &format!("    {}", line), 10.0, false);
+                }
+            }
+            for s in &t.subtasks {
+                for (i, line) in wrap_text(&format!("    {} {}", if s.completed { "[x]" } else { "[ ]" }, s.title), 95).into_iter().enumerate() {
+                    write_line(&doc, if i == 0 { &line } else { &format!("    {}", line) }, 11.0, false);
+                }
+            }
         }
-        if !t.description.trim().is_empty() {
-            write_line(&doc, &format!("    — {}", t.description.trim()), 10.0);
+        write_line(&doc, "", 6.0, false);
+    }
+
+    // Section: Completed Tasks
+    if completed_tasks > 0 {
+        write_line(&doc, "Completed Tasks", 13.0, true);
+        for t in project.todos.iter().filter(|t| t.completed) {
+            for (i, line) in wrap_text(&format!("[x] {}", t.title), 90).into_iter().enumerate() {
+                write_line(&doc, if i == 0 { &line } else { &format!("    {}", line) }, 12.0, false);
+            }
+            if !t.description.trim().is_empty() {
+                for line in wrap_text(&format!("— {}", t.description.trim()), 95) {
+                    write_line(&doc, &format!("    {}", line), 10.0, false);
+                }
+            }
+            for s in &t.subtasks {
+                for (i, line) in wrap_text(&format!("    {} {}", if s.completed { "[x]" } else { "[ ]" }, s.title), 95).into_iter().enumerate() {
+                    write_line(&doc, if i == 0 { &line } else { &format!("    {}", line) }, 11.0, false);
+                }
+            }
         }
     }
 
@@ -247,6 +491,153 @@ fn export_active_project_pdf(projects: &Vec<Project>, active_id: Option<u64>) ->
     let mut out = BufWriter::new(File::create(path).map_err(|e| format!("create error: {e}"))?);
     doc.save(&mut out).map_err(|e| format!("save error: {e}"))?;
     println!("[Export] Saved PDF successfully");
+    Ok(())
+}
+
+// Desktop export fallback when `desktop` feature is NOT enabled (no file dialog)
+#[cfg(all(not(target_os = "android"), not(feature = "desktop")))]
+fn export_active_project_pdf(projects: &Vec<Project>, active_id: Option<u64>) -> Result<(), String> {
+    let active_id = active_id.ok_or_else(|| "No active project selected".to_string())?;
+    let project = projects
+        .iter()
+        .find(|p| p.id == active_id)
+        .ok_or_else(|| "Active project not found".to_string())?;
+
+    // Create doc and fonts
+    let (doc, page1, layer1) = PdfDocument::new(
+        &format!("Project Report — {}", project.name),
+        Mm(210.0),
+        Mm(297.0),
+        "Layer 1",
+    );
+    let font_regular = doc
+        .add_builtin_font(BuiltinFont::Helvetica)
+        .map_err(|e| format!("font error: {e}"))?;
+    let font_bold = doc
+        .add_builtin_font(BuiltinFont::HelveticaBold)
+        .map_err(|e| format!("font error: {e}"))?;
+
+    // Layout
+    let mut current_page = page1;
+    let mut current_layer = doc.get_page(current_page).get_layer(layer1);
+    let margin_left = Mm(15.0);
+    let margin_top = Mm(15.0);
+    let mut cursor_y = Mm(297.0) - margin_top;
+
+    let mut ensure_page = |doc: &PdfDocumentReference| {
+        if cursor_y.0 < 20.0 {
+            let (p, l) = doc.add_page(Mm(210.0), Mm(297.0), "Layer");
+            current_page = p;
+            current_layer = doc.get_page(current_page).get_layer(l);
+            cursor_y = Mm(297.0) - margin_top;
+        }
+    };
+    let mut write_line = |doc: &PdfDocumentReference, text: &str, size_pt: f64, bold: bool| {
+        ensure_page(doc);
+        let font = if bold { &font_bold } else { &font_regular };
+        current_layer.use_text(text, size_pt, margin_left, cursor_y, font);
+        cursor_y = Mm(cursor_y.0 - (size_pt * 0.42));
+    };
+    fn wrap_text(s: &str, max_chars: usize) -> Vec<String> {
+        let words: Vec<&str> = s.split_whitespace().collect();
+        let mut lines: Vec<String> = Vec::new();
+        let mut line = String::new();
+        for w in words {
+            if line.is_empty() {
+                line.push_str(w);
+            } else if line.len() + 1 + w.len() <= max_chars {
+                line.push(' ');
+                line.push_str(w);
+            } else {
+                lines.push(line);
+                line = w.to_string();
+            }
+        }
+        if !line.is_empty() {
+            lines.push(line);
+        }
+        if lines.is_empty() { vec![String::new()] } else { lines }
+    }
+
+    // Data & Summary
+    let total_tasks = project.todos.len();
+    let completed_tasks = project.todos.iter().filter(|t| t.completed).count();
+    let active_tasks = total_tasks - completed_tasks;
+    let total_subtasks: usize = project.todos.iter().map(|t| t.subtasks.len()).sum();
+    let completion = if total_tasks > 0 {
+        (completed_tasks as f64 / total_tasks as f64) * 100.0
+    } else { 0.0 };
+
+    let date_str = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
+    write_line(&doc, &format!("Project Report"), 18.0, true);
+    write_line(&doc, &format!("{}", project.name), 15.0, false);
+    write_line(&doc, &format!("Generated: {}", date_str), 10.0, false);
+    write_line(&doc, "", 8.0, false);
+
+    write_line(&doc, "Summary", 14.0, true);
+    write_line(&doc, &format!(
+        "Tasks: {}  •  Completed: {}  •  Active: {}  •  Subtasks: {}  •  Completion: {:.1}%",
+        total_tasks, completed_tasks, active_tasks, total_subtasks, completion
+    ), 11.0, false);
+    write_line(&doc, "", 6.0, false);
+
+    if active_tasks > 0 {
+        write_line(&doc, "Active Tasks", 13.0, true);
+        for t in project.todos.iter().filter(|t| !t.completed) {
+            for (i, line) in wrap_text(&format!("[ ] {}", t.title), 90).into_iter().enumerate() {
+                write_line(&doc, if i == 0 { &line } else { &format!("    {}", line) }, 12.0, false);
+            }
+            if !t.description.trim().is_empty() {
+                for line in wrap_text(&format!("— {}", t.description.trim()), 95) {
+                    write_line(&doc, &format!("    {}", line), 10.0, false);
+                }
+            }
+            for s in &t.subtasks {
+                for (i, line) in wrap_text(&format!("    {} {}", if s.completed { "[x]" } else { "[ ]" }, s.title), 95).into_iter().enumerate() {
+                    write_line(&doc, if i == 0 { &line } else { &format!("    {}", line) }, 11.0, false);
+                }
+            }
+        }
+        write_line(&doc, "", 6.0, false);
+    }
+
+    if completed_tasks > 0 {
+        write_line(&doc, "Completed Tasks", 13.0, true);
+        for t in project.todos.iter().filter(|t| t.completed) {
+            for (i, line) in wrap_text(&format!("[x] {}", t.title), 90).into_iter().enumerate() {
+                write_line(&doc, if i == 0 { &line } else { &format!("    {}", line) }, 12.0, false);
+            }
+            if !t.description.trim().is_empty() {
+                for line in wrap_text(&format!("— {}", t.description.trim()), 95) {
+                    write_line(&doc, &format!("    {}", line), 10.0, false);
+                }
+            }
+            for s in &t.subtasks {
+                for (i, line) in wrap_text(&format!("    {} {}", if s.completed { "[x]" } else { "[ ]" }, s.title), 95).into_iter().enumerate() {
+                    write_line(&doc, if i == 0 { &line } else { &format!("    {}", line) }, 11.0, false);
+                }
+            }
+        }
+    }
+
+    use std::fs::File;
+    use std::io::BufWriter;
+    use std::path::PathBuf;
+    // Default path: ~/Downloads/<project>_<ts>.pdf (best-effort)
+    let mut dest = if let Ok(home) = std::env::var("HOME") {
+        let mut p = PathBuf::from(home);
+        p.push("Downloads");
+        p
+    } else {
+        std::env::temp_dir()
+    };
+    let ts = chrono::Utc::now().timestamp();
+    let fname = format!("{}_{}.pdf", project.name.replace('/', "-"), ts);
+    dest.push(fname);
+
+    let mut out = BufWriter::new(File::create(&dest).map_err(|e| format!("create error: {e}"))?);
+    doc.save(&mut out).map_err(|e| format!("save error: {e}"))?;
+    println!("[Export] Saved PDF to {}", dest.display());
     Ok(())
 }
 

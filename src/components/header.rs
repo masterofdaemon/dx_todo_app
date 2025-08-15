@@ -17,7 +17,7 @@ pub fn Header(count: usize, on_switch: EventHandler<()>, on_export: EventHandler
     // Select project label and language handlers
     // Use i18n only when feature is on AND not on Android
     #[cfg(all(feature = "i18n", not(target_os = "android")))]
-    let (select_project_label, change_en_btn, change_ru_btn) = {
+    let (select_project_label, _change_en_btn, _change_ru_btn) = {
         let mut i = i18n();
         let label = t!("header.select_project").to_string();
         let change_en = move |_| i.set_language(langid!("en-US"));
@@ -27,7 +27,7 @@ pub fn Header(count: usize, on_switch: EventHandler<()>, on_export: EventHandler
 
     // Fallback: literals (Russian on Android, English elsewhere without i18n)
     #[cfg(any(not(feature = "i18n"), target_os = "android"))]
-    let (select_project_label, change_en_btn, change_ru_btn) = {
+    let (select_project_label, _change_en_btn, _change_ru_btn) = {
         #[cfg(target_os = "android")]
         { ("Выберите проект".to_string(), None::<EventHandler<MouseEvent>>, None::<EventHandler<MouseEvent>>) }
         #[cfg(not(target_os = "android"))]
@@ -56,8 +56,8 @@ pub fn Header(count: usize, on_switch: EventHandler<()>, on_export: EventHandler
                 {
                     #[cfg(all(feature = "i18n", not(target_os = "android")))]
                     { rsx!{
-                        button { class: "btn btn-ghost", onclick: change_en_btn.unwrap(), "EN" }
-                        button { class: "btn btn-ghost", onclick: change_ru_btn.unwrap(), "RU" }
+                        button { class: "btn btn-ghost", onclick: _change_en_btn.unwrap(), "EN" }
+                        button { class: "btn btn-ghost", onclick: _change_ru_btn.unwrap(), "RU" }
                     }}
                 }
                 // App actions

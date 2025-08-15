@@ -44,7 +44,6 @@ pub fn TodoItem(
                     div { class: "left",
                         span { 
                             class: "drag-handle", 
-                            title: "Drag to reorder", 
                             draggable: "true", 
                             ondragstart: move |_| on_drag_start.call(todo.id),
                             ondragend: move |_| on_drag_end.call(todo.id),
@@ -89,12 +88,12 @@ pub fn TodoItem(
             // actions
             div { class: "actions",
                 if !is_editing {
-                    button { class: "btn btn-primary", onclick: move |_| { nav.push(Route::Details { id: todo.id }); }, "Details" }
-                    button { class: "btn btn-ghost", onclick: move |e| on_start_edit.call(e), "Edit" }
-                    button { class: "btn btn-danger", onclick: move |e| on_remove.call(e), "Remove" }
+                    button { class: "btn btn-primary btn-icon", onclick: move |_| { nav.push(Route::Details { id: todo.id }); }, "🔍" }
+                    button { class: "btn btn-edit btn-icon", onclick: move |e| on_start_edit.call(e), "✎" }
+                    button { class: "btn btn-danger btn-icon", onclick: move |e| on_remove.call(e), "🗑" }
                 } else {
-                    button { class: "btn btn-success", onclick: move |e| on_save_click.call(e), "Save" }
-                    button { class: "btn btn-ghost", onclick: move |e| on_cancel.call(e), "Cancel" }
+                    button { class: "btn btn-success btn-icon", onclick: move |e| on_save_click.call(e), "💾" }
+                    button { class: "btn btn-ghost btn-icon", onclick: move |e| on_cancel.call(e), "✖" }
                 }
             }
         }

@@ -1,9 +1,12 @@
 use dioxus::prelude::*;
-use dioxus_router::prelude::use_navigator;
+use dioxus_router::prelude::*;
 use dioxus::events::Key;
 use std::cmp::max;
 use printpdf::{PdfDocument, PdfDocumentReference, Mm, BuiltinFont, IndirectFontRef};
 use printpdf::indices::{PdfPageIndex, PdfLayerIndex};
+use dioxus_i18n::{prelude::*, t};
+use dioxus_i18n::prelude::Locale;
+use unic_langid::langid;
 #[cfg(all(not(target_os = "android"), feature = "desktop"))]
 use rfd::FileDialog;
 
@@ -13,23 +16,31 @@ use crate::components::{header::Header, add_form::AddForm, filter_bar::FilterBar
 use crate::components::projects::ProjectsState;
 use crate::components::header::HeaderState;
 
+// Use relative asset paths on Android (no leading slash), absolute on others
+#[cfg(target_os = "android")]
+pub const FAVICON: Asset = asset!("assets/favicon.ico");
+#[cfg(not(target_os = "android"))]
 pub const FAVICON: Asset = asset!("/assets/favicon.ico");
-// Use relative asset path on Android, absolute on others
+
 #[cfg(target_os = "android")]
 pub const MAIN_CSS: Asset = asset!("assets/main.css");
 #[cfg(not(target_os = "android"))]
 pub const MAIN_CSS: Asset = asset!("/assets/main.css");
 
-// Render head styles: on Android inject inline CSS, elsewhere link asset
+// Head nodes helper: on Android, skip document::* tags; on others, include meta, favicon, and stylesheet
 #[cfg(target_os = "android")]
-fn head_styles() -> Element {
-    // Use a normal stylesheet link on Android to avoid rsx parsing issues
-    rsx! { document::Link { rel: "stylesheet", href: MAIN_CSS } }
+fn head_nodes() -> Element {
+    const INLINE_CSS: &str = include_str!("../assets/main.css");
+    rsx! { style { "{INLINE_CSS}" } }
 }
 
 #[cfg(not(target_os = "android"))]
-fn head_styles() -> Element {
-    rsx! { document::Link { rel: "stylesheet", href: MAIN_CSS } }
+fn head_nodes() -> Element {
+    rsx! {
+        document::Link { rel: "icon", href: FAVICON }
+        document::Meta { name: "viewport", content: "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" }
+        document::Link { rel: "stylesheet", href: MAIN_CSS }
+    }
 }
 
 // Removed Android inline style helper to avoid rsx macro issues
@@ -717,19 +728,47 @@ pub fn App() -> Element {
     // global flash banner state
     let flash = use_signal(|| None::<String>);
     // provide to children without a JSX ContextProvider component
-    use_context_provider(|| FlashState { msg: flash });
+    use_context_provider(|| FlashState { msg: flash.clone() });
+
+    // Note: auto-dismiss removed to avoid extra async runtime dependency on Android.
+
+    // Initialize i18n with Russian as default (disabled on Android to avoid startup panic)
+    #[cfg(not(target_os = "android"))]
+    use_init_i18n(|| {
+        I18nConfig::new(langid!("ru-RU"))
+            .with_locale(Locale::new_static(langid!("en-US"), include_str!("./i18n/en-US.ftl")))
+            .with_locale(Locale::new_static(langid!("ru-RU"), include_str!("./i18n/ru-RU.ftl")))
+    });
 
     rsx! {
-        document::Link { rel: "icon", href: FAVICON }
-        document::Meta { name: "viewport", content: "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" }
-        { head_styles() }
+        { head_nodes() }
         { if let Some(m) = flash.read().clone() { rsx!{
             div {
                 style: "position:fixed; top:12px; left:50%; transform:translateX(-50%); background:rgba(56,189,248,0.95); color:#0b1020; padding:10px 14px; border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,0.25); font-weight:600; z-index:9999;",
                 {m}
             }
         } } else { rsx!{} } }
-        Router::<Route> {}
+        { main_body() }
+    }
+}
+
+#[cfg(target_os = "android")]
+fn main_body() -> Element {
+    rsx! {
+        ErrorBoundary {
+            handle_error: move |e| rsx!{ pre { style: "white-space:pre-wrap; padding:12px; color:#ef4444;", "{e:?}" } },
+            Router::<Route> {}
+        }
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+fn main_body() -> Element {
+    rsx! {
+        ErrorBoundary {
+            handle_error: move |e| rsx!{ pre { style: "white-space:pre-wrap; padding:12px; color:#ef4444;", "{e:?}" } },
+            Router::<Route> {}
+        }
     }
 }
 
@@ -746,13 +785,23 @@ pub fn List() -> Element {
     let nav = use_navigator();
     let mut flash = use_context::<FlashState>();
 
+    #[cfg(target_os = "android")]
+    let no_active_lbl = "Активный проект не выбран. Откройте раздел Проекты.";
+    #[cfg(not(target_os = "android"))]
+    let no_active_lbl = "No active project selected. Go to Projects.";
+
     let Some(active_id) = *active_project_id else {
-        return rsx! { div { class: "app", div { class: "card", "No active project selected. Go to Projects." } } };
+        return rsx! { div { class: "app", div { class: "card", "{no_active_lbl}" } } };
     };
 
     let project = projects.read().iter().find(|p| p.id == active_id).cloned();
+    #[cfg(target_os = "android")]
+    let not_found_project_lbl = "Проект не найден";
+    #[cfg(not(target_os = "android"))]
+    let not_found_project_lbl = "Project not found";
+
     let Some(proj) = project else {
-        return rsx! { div { class: "app", div { class: "card", "Project not found" } } };
+        return rsx! { div { class: "app", div { class: "card", "{not_found_project_lbl}" } } };
     };
 
     // derive view state and handlers
@@ -776,6 +825,9 @@ pub fn List() -> Element {
         match export_active_project_pdf(&projects.read(), Some(active_id)) {
             Ok(()) => {
                 println!("[Export] Success");
+                #[cfg(target_os = "android")]
+                flash.msg.set(Some("Экспортировано в Загрузки".to_string()));
+                #[cfg(not(target_os = "android"))]
                 flash.msg.set(Some("Exported to Downloads".to_string()));
             }
             Err(e) => {
@@ -829,7 +881,11 @@ pub fn List() -> Element {
                 AddForm { value: new_title.read().clone(), on_input: on_input, on_enter: on_enter, on_add: on_add }
                 FilterBar { active: active_filter, on_all: on_all, on_active: on_active_f, on_completed: on_completed_f, on_clear_completed: on_clear_completed }
                 { if visible.is_empty() {
-                    rsx!{ div { style: "opacity:.8; color:var(--muted); padding: 16px 4px;", "No tasks yet. Add one above." } }
+                    #[cfg(target_os = "android")]
+                    let empty_lbl = "Задач пока нет. Добавьте новую выше.";
+                    #[cfg(not(target_os = "android"))]
+                    let empty_lbl = "No tasks yet. Add one above.";
+                    rsx!{ div { style: "opacity:.8; color:var(--muted); padding: 16px 4px;", "{empty_lbl}" } }
                 } else {
                     rsx!{ ul { class: "list",
                         for todo in visible.into_iter() {
@@ -902,7 +958,11 @@ pub fn Details(id: u64) -> Element {
     let nav = use_navigator();
 
     let todo_opt = projects.read().iter().find(|p| p.id == active_project_id).and_then(|p| p.todos.iter().find(|t| t.id == id)).cloned();
-    let Some(todo) = todo_opt else { return rsx!{ div { class: "app", div { class: "card", "Not found" } } }; };
+    #[cfg(target_os = "android")]
+    let not_found_lbl = "Не найдено";
+    #[cfg(not(target_os = "android"))]
+    let not_found_lbl = "Not found";
+    let Some(todo) = todo_opt else { return rsx!{ div { class: "app", div { class: "card", "{not_found_lbl}" } } }; };
 
     let mut add_sub = move |title: String| {
         if title.trim().is_empty() { return; }
@@ -940,16 +1000,30 @@ pub fn Details(id: u64) -> Element {
     let mut sub_input = use_signal(String::new);
 
     rsx! {
-        document::Link { rel: "icon", href: FAVICON }
-        document::Link { rel: "stylesheet", href: MAIN_CSS }
+        { head_nodes() }
         div { class: "app",
             div { class: "card",
                 div { class: "row between", style: "margin-bottom:12px;",
-                    button { class: "btn btn-ghost", onclick: move |_| { nav.push(Route::List {}); }, "← Back" }
+                    {
+                        #[cfg(target_os = "android")]
+                        { rsx!{ button { class: "btn btn-ghost", onclick: move |_| { nav.push(Route::List {}); }, "← Назад" } } }
+                        #[cfg(not(target_os = "android"))]
+                        { rsx!{ button { class: "btn btn-ghost", onclick: move |_| { nav.push(Route::List {}); }, "← Back" } } }
+                    }
                 }
                 h2 { class: "title", "{todo.title}" }
-                textarea { class: "text desc", rows: "3", placeholder: "Description...", value: "{todo.description}", oninput: move |e| update_desc(e.value()) }
-                h3 { style: "margin-top:16px;", "Subtasks" }
+                {
+                    #[cfg(target_os = "android")]
+                    { rsx!{ textarea { class: "text desc", rows: "3", placeholder: "Описание...", value: "{todo.description}", oninput: move |e| update_desc(e.value()) } } }
+                    #[cfg(not(target_os = "android"))]
+                    { rsx!{ textarea { class: "text desc", rows: "3", placeholder: "Description...", value: "{todo.description}", oninput: move |e| update_desc(e.value()) } } }
+                }
+                {
+                    #[cfg(target_os = "android")]
+                    { rsx!{ h3 { style: "margin-top:16px;", "Подзадачи" } } }
+                    #[cfg(not(target_os = "android"))]
+                    { rsx!{ h3 { style: "margin-top:16px;", "Subtasks" } } }
+                }
                 ul { class: "subtasks",
                     for st in todo.subtasks.clone().into_iter() {
                         li { key: "sub-{st.id}", class: "sub-item",
@@ -959,8 +1033,18 @@ pub fn Details(id: u64) -> Element {
                         }
                     }
                     li { class: "sub-add",
-                        input { class: "text sub-input", r#type: "text", placeholder: "Add a subtask…", value: "{sub_input.read()}", oninput: move |e| sub_input.set(e.value()), onkeydown: move |e| { if e.key() == Key::Enter { let v = sub_input.read().trim().to_string(); if !v.is_empty() { add_sub(v); sub_input.set(String::new()); } } } }
-                        button { class: "btn btn-primary sub-add-btn", onclick: move |_| { let v = sub_input.read().trim().to_string(); if !v.is_empty() { add_sub(v); sub_input.set(String::new()); } }, "Add" }
+                        {
+                            #[cfg(target_os = "android")]
+                            { rsx!{
+                                input { class: "text sub-input", r#type: "text", placeholder: "Добавить подзадачу…", value: "{sub_input.read()}", oninput: move |e| sub_input.set(e.value()), onkeydown: move |e| { if e.key() == Key::Enter { let v = sub_input.read().trim().to_string(); if !v.is_empty() { add_sub(v); sub_input.set(String::new()); } } } }
+                                button { class: "btn btn-primary sub-add-btn", onclick: move |_| { let v = sub_input.read().trim().to_string(); if !v.is_empty() { add_sub(v); sub_input.set(String::new()); } }, "Добавить" }
+                            } }
+                            #[cfg(not(target_os = "android"))]
+                            { rsx!{
+                                input { class: "text sub-input", r#type: "text", placeholder: "Add a subtask…", value: "{sub_input.read()}", oninput: move |e| sub_input.set(e.value()), onkeydown: move |e| { if e.key() == Key::Enter { let v = sub_input.read().trim().to_string(); if !v.is_empty() { add_sub(v); sub_input.set(String::new()); } } } }
+                                button { class: "btn btn-primary sub-add-btn", onclick: move |_| { let v = sub_input.read().trim().to_string(); if !v.is_empty() { add_sub(v); sub_input.set(String::new()); } }, "Add" }
+                            } }
+                        }
                     }
                 }
             }

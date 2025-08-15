@@ -15,6 +15,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 directories = "5"
 genpdf = { version = "0.2.0-alpha.1" }
+# i18n
+dioxus-i18n = "0.2"
+unic-langid = "0.9"
 # File dialogs only for desktop platforms
 rfd = { version = "0.14", optional = true }
 printpdf = "0.3"
@@ -24,17 +27,23 @@ ndk-context = "0.1"
 # dioxus-mobile provides the NativeActivity when the library is named `dioxusmain`
 
 [features]
-# Default to mobile to make Android easy
-default = ["mobile"]
+# Enable i18n by default and target mobile by default
+default = ["mobile", "i18n"]
 web = ["dioxus/web"]
 # Desktop enables desktop-specific dioxus crate and rfd dialogs
 desktop = ["dioxus/desktop", "dioxus-desktop", "rfd"]
 # Mobile enables mobile-specific crate
 mobile = ["dioxus/mobile", "dioxus-mobile"]
+# I18n toggle (no extra deps beyond existing ones)
+i18n = []
 
 [lib]
 name = "dioxusmain"
 crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "dx_todo_app_bin"
+path = "src/main.rs"
 
 
 [profile]

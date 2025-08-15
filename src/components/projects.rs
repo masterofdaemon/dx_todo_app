@@ -30,10 +30,20 @@ pub fn Projects() -> Element {
         nav.push(Route::List {});
     };
 
+    // Labels: English default, Russian on Android
+    #[cfg(target_os = "android")]
+    let (title_lbl, open_lbl, placeholder_lbl, add_lbl) = (
+        "Проекты", "Открыть", "Название нового проекта", "Добавить"
+    );
+    #[cfg(not(target_os = "android"))]
+    let (title_lbl, open_lbl, placeholder_lbl, add_lbl) = (
+        "Projects", "Open", "New project name", "Add"
+    );
+
     rsx! {
         div { class: "app",
             div { class: "card",
-                h2 { class: "title", "Projects" }
+                h2 { class: "title", "{title_lbl}" }
                 ul { class: "list",
                     for p in projects.read().iter().cloned() {
                         li { class: "list-item",
@@ -41,14 +51,14 @@ pub fn Projects() -> Element {
                                 div { class: "item-title", "{p.name}" }
                             }
                             div { class: "actions",
-                                button { class: "btn btn-primary", onclick: move |_| { println!("[Projects] Open clicked for id={} name={}", p.id, p.name); active.set(Some(p.id)); println!("[Projects] Navigating to List after open"); nav.push(Route::List {}); }, "Open" }
+                                button { class: "btn btn-primary", onclick: move |_| { println!("[Projects] Open clicked for id={} name={}", p.id, p.name); active.set(Some(p.id)); println!("[Projects] Navigating to List after open"); nav.push(Route::List {}); }, "{open_lbl}" }
                             }
                         }
                     }
                 }
                 div { class: "row", style: "gap:8px; margin-top: 12px;",
-                    input { class: "text", placeholder: "New project name", value: "{new_name.read()}", oninput: move |e| new_name.set(e.value()) }
-                    button { class: "btn btn-primary", onclick: move |_| { let n = new_name.read().clone(); if !n.trim().is_empty() { println!("[Projects] Add clicked with name={}", n); add_project(n); new_name.set(String::new()); } }, "Add" }
+                    input { class: "text", placeholder: "{placeholder_lbl}", value: "{new_name.read()}", oninput: move |e| new_name.set(e.value()) }
+                    button { class: "btn btn-primary", onclick: move |_| { let n = new_name.read().clone(); if !n.trim().is_empty() { println!("[Projects] Add clicked with name={}", n); add_project(n); new_name.set(String::new()); } }, "{add_lbl}" }
                 }
             }
         }

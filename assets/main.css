@@ -90,6 +90,7 @@ body { margin:0; color: var(--text);
 
 /* Buttons */
 .btn { border:1px solid rgba(255,255,255,.16); border-radius: 12px; padding:10px 14px; background: rgba(255,255,255,0.06); color: var(--text); cursor:pointer; font-size:14px; }
+.btn-icon { padding: 6px 8px; border-radius: 10px; font-size: 13px; line-height: 1; min-width: 34px; height: 34px; display:inline-flex; align-items:center; justify-content:center; }
 .btn:hover { background: rgba(255,255,255,0.12); }
 .btn-primary { background: linear-gradient(135deg, var(--accent1), var(--accent2)); color:#0b1020; border-color: transparent; box-shadow: 0 10px 22px rgba(110,231,240,0.25), 0 6px 18px rgba(124,108,243,0.22); }
 .btn-primary:hover { filter: brightness(1.05); }
@@ -97,6 +98,9 @@ body { margin:0; color: var(--text);
 .btn-success:hover { filter: brightness(1.05); }
 .btn-danger { background: linear-gradient(135deg, #ff8b73, var(--danger)); color:#2b0a0a; border-color: transparent; box-shadow: 0 10px 20px rgba(255,107,107,0.25); }
 .btn-danger:hover { filter: brightness(1.05); }
+/* Edit button style */
+.btn-edit { background: linear-gradient(135deg, #fde68a, #f59e0b); color:#2b1600; border-color: transparent; box-shadow: 0 8px 18px rgba(245,158,11,0.25); }
+.btn-edit:hover { filter: brightness(1.05); }
 .btn-ghost { background: rgba(255,255,255,0.04); }
 .btn-ghost:hover { background: rgba(255,255,255,0.08); }
 .btn-link { background: transparent; border: none; color: var(--accent1); padding: 4px 0; }

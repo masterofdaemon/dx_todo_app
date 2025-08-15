@@ -1,6 +1,26 @@
 /* Ensure layout never exceeds viewport */
 *, *::before, *::after { box-sizing: border-box; }
 
+/* Mobile-native interaction defaults */
+/* Disable selection/tap highlight on interactive controls for Android-like feel */
+button, .btn, .btn-icon, .btn-ghost, .btn-primary, .btn-success, .btn-danger,
+.tab, .tabs button, .drag-handle, .filters button, .actions button,
+input[type="checkbox"], .btn-link {
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+  touch-action: manipulation;
+  border-radius: 12px;
+}
+
+/* Provide visible focus only when keyboard navigating */
+button:focus-visible, .btn:focus-visible, .tab:focus-visible {
+  outline: 3px solid rgba(110,231,240,0.6);
+  outline-offset: 2px;
+}
+
 /* Modal overlay and modal card */
 .modal-overlay {
   position: fixed;
@@ -91,27 +111,41 @@ body { margin:0; color: var(--text);
 /* Buttons */
 .btn { border:1px solid rgba(255,255,255,.16); border-radius: 12px; padding:10px 14px; background: rgba(255,255,255,0.06); color: var(--text); cursor:pointer; font-size:14px; }
 .btn-icon { padding: 6px 8px; border-radius: 10px; font-size: 13px; line-height: 1; min-width: 34px; height: 34px; display:inline-flex; align-items:center; justify-content:center; }
-.btn:hover { background: rgba(255,255,255,0.12); }
 .btn-primary { background: linear-gradient(135deg, var(--accent1), var(--accent2)); color:#0b1020; border-color: transparent; box-shadow: 0 10px 22px rgba(110,231,240,0.25), 0 6px 18px rgba(124,108,243,0.22); }
-.btn-primary:hover { filter: brightness(1.05); }
 .btn-success { background: linear-gradient(135deg, #34d399, var(--success)); color:#05221a; border-color: transparent; box-shadow: 0 8px 18px rgba(52,211,153,0.25); }
-.btn-success:hover { filter: brightness(1.05); }
 .btn-danger { background: linear-gradient(135deg, #ff8b73, var(--danger)); color:#2b0a0a; border-color: transparent; box-shadow: 0 10px 20px rgba(255,107,107,0.25); }
-.btn-danger:hover { filter: brightness(1.05); }
 /* Edit button style */
 .btn-edit { background: linear-gradient(135deg, #fde68a, #f59e0b); color:#2b1600; border-color: transparent; box-shadow: 0 8px 18px rgba(245,158,11,0.25); }
-.btn-edit:hover { filter: brightness(1.05); }
 .btn-ghost { background: rgba(255,255,255,0.04); }
-.btn-ghost:hover { background: rgba(255,255,255,0.08); }
 .btn-link { background: transparent; border: none; color: var(--accent1); padding: 4px 0; }
-.btn-link:hover { text-decoration: underline; }
 .btn-link.danger { color: var(--danger); }
+
+/* Only apply hover styles on devices that actually support hover to avoid sticky states on mobile */
+@media (hover: hover) and (pointer: fine) {
+  .btn:hover { background: rgba(255,255,255,0.12); }
+  .btn-primary:hover { filter: brightness(1.05); }
+  .btn-success:hover { filter: brightness(1.05); }
+  .btn-danger:hover { filter: brightness(1.05); }
+  .btn-edit:hover { filter: brightness(1.05); }
+  .btn-ghost:hover { background: rgba(255,255,255,0.08); }
+  .btn-link:hover { text-decoration: underline; }
+}
+
+/* Provide tactile feedback on touch devices */
+@media (hover: none) and (pointer: coarse) {
+  .btn:active, .btn-primary:active, .btn-success:active, .btn-danger:active, .btn-ghost:active, .btn-edit:active {
+    transform: translateY(1px) scale(0.99);
+    filter: brightness(0.98);
+  }
+}
 
 /* Filters */
 .filters { display: flex; align-items: center; justify-content: space-between; margin: 12px 0 16px; }
 .tabs { display: flex; gap: 8px; }
 .tab { position: relative; padding: 8px 12px; border:1px solid rgba(255,255,255,.16); border-radius: 999px; background: rgba(255,255,255,0.06); color: var(--text); cursor: pointer; transition: background .2s ease, color .2s ease, border-color .2s ease, transform .15s ease; }
-.tab:hover { transform: translateY(-1px); }
+@media (hover: hover) and (pointer: fine) {
+  .tab:hover { transform: translateY(-1px); }
+}
 .tab.active { background: linear-gradient(135deg, var(--accent1), var(--accent2)); color: #0b1020; border-color: transparent; }
 .tab.active::after { content: ""; position: absolute; left: 18px; right: 18px; bottom: -6px; height: 2px; border-radius: 2px; background: linear-gradient(90deg, var(--accent1), var(--accent2)); animation: underline-in 180ms ease-out both; }
 

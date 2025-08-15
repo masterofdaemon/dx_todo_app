@@ -730,7 +730,20 @@ pub fn App() -> Element {
     // provide to children without a JSX ContextProvider component
     use_context_provider(|| FlashState { msg: flash.clone() });
 
-    // Note: auto-dismiss removed to avoid extra async runtime dependency on Android.
+    // Auto-dismiss flash after 2 seconds using tokio timer (works on mobile/desktop)
+    {
+        let flash = flash.clone();
+        use_effect(move || {
+            if flash.read().is_some() {
+                let mut flash = flash.clone();
+                dioxus::prelude::spawn(async move {
+                    use std::time::Duration;
+                    tokio::time::sleep(Duration::from_millis(2000)).await;
+                    flash.set(None);
+                });
+            }
+        });
+    }
 
     // Initialize i18n with Russian as default (disabled on Android to avoid startup panic)
     #[cfg(not(target_os = "android"))]

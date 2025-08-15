@@ -1656,6 +1656,7 @@ dependencies = [
  "rfd",
  "serde",
  "serde_json",
+ "tokio",
  "unic-langid",
 ]
 

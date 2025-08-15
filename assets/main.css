@@ -1,3 +1,6 @@
+/* Ensure layout never exceeds viewport */
+*, *::before, *::after { box-sizing: border-box; }
+
 /* Modal overlay and modal card */
 .modal-overlay {
   position: fixed;
@@ -67,18 +70,17 @@ body { margin:0; color: var(--text);
 
 /* App shell and card scale nicely across window sizes */
 .app { min-height: 100vh; padding: clamp(16px, 3vw, 40px); }
-.card { width: min(960px, 96vw); margin: 16px auto; padding: clamp(18px, 3vw, 28px); border-radius: 16px; background: #fff; box-shadow: 0 10px 25px rgba(0,0,0,0.08); }
+.card { width: 100%; max-width: 960px; margin: 16px auto; padding: clamp(18px, 3vw, 28px); border-radius: 16px; background: #fff; box-shadow: 0 10px 25px rgba(0,0,0,0.08); }
 
 /* Header */
-.header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
-.title { font-size: clamp(26px,4vw,34px); font-weight: 800; margin:0; color: var(--text); letter-spacing: .2px; }
+.header { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.title { display:none; }
 .meta { color: var(--muted); font-size: 12px; }
-.header::after{ content:""; display:block; height:3px; width:72px; margin-top:8px;
-  background: linear-gradient(90deg, var(--accent1), var(--accent2)); border-radius: 999px; opacity:.9; }
+.header::after{ content:none; }
 
 /* Add form */
 .add { display: flex; gap: 8px; margin-bottom: 12px; }
-.text { flex:1; border:1px solid rgba(15,23,42,.12); border-radius: 12px; padding:12px 14px; font-size:14px; outline:none;
+.text { flex:1; min-width: 0; border:1px solid rgba(15,23,42,.12); border-radius: 12px; padding:12px 14px; font-size:14px; outline:none;
   background: #ffffff; color: #0f172a;
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.0);
 }
@@ -120,6 +122,7 @@ body { margin:0; color: var(--text);
 .list-item { animation: item-in 260ms cubic-bezier(.16,1,.3,1) both; transition: background .2s ease, box-shadow .2s ease; }
 .list-item.editing { background: #f8fafc; border-radius: 12px; padding: 14px; border: 1px solid rgba(15,23,42,0.08); border-bottom: 0; box-shadow: none; }
 .content { flex: 1; }
+.content { min-width: 0; }
 .actions { display: flex; gap: 8px; align-items: center; }
 .edit { width: 100%; }
 .item-title { font-size: 16px; font-weight: 600; color: #374151; }
@@ -152,13 +155,17 @@ body { margin:0; color: var(--text);
 
 /* Small screens */
 @media (max-width: 520px) {
+  .app { padding: 12px; }
+  .card { margin: 12px auto; }
+  .actions { flex-wrap: wrap; }
+  .btn { padding: 10px 12px; }
   .filters { flex-direction: column; align-items: flex-start; gap: 10px; }
 }
 
 /* --- Final layout fixes (force cross-screen behavior) --- */
-html, body { height: 100%; }
-body { overflow: hidden; }
-.app { height: 100vh; overflow: hidden; display: flex; }
+html, body { height: 100%; overflow: hidden; }
+body { overflow: auto; overflow-x: hidden; width: 100%; }
+.app { height: 100vh; overflow: auto; display: flex; flex-direction: column; max-width: 100%; }
 .card { display:flex; flex-direction:column; width:min(900px, 92vw);
   margin: clamp(12px,3vh,36px) auto;
   padding: clamp(18px, 2.4vw, 28px);

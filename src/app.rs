@@ -434,7 +434,7 @@ pub fn List() -> Element {
     rsx! {
         div { class: "app",
             Header { count: count, on_switch: on_switch, on_export: on_export }
-            div { class: "card",
+            div { class: "card", style: "background:#ffffff; color:#0f172a; border:1px solid rgba(15,23,42,0.12); border-radius:16px; margin:12px auto; padding:18px; box-shadow: 0 10px 25px rgba(0,0,0,0.08);",
                 AddForm { value: new_title.read().clone(), on_input: on_input, on_enter: on_enter, on_add: on_add }
                 FilterBar { active: active_filter, on_all: on_all, on_active: on_active_f, on_completed: on_completed_f, on_clear_completed: on_clear_completed }
                 { if visible.is_empty() {
